@@ -1,0 +1,29 @@
+#### FILES ####
+
+users.txt - blank user database
+bin/cpdf - cpdf binary from http://community.coherentpdf.com/ is used to split pdf files
+bin/ftpuser - command to manage the users of the system
+bin/splitlz - skript to process lohnset PDFs from inbox, called from cron or manualy
+certs/*.pfx - certificates used to sign the individual Lohnzettel PDFs
+etc/payroll - goes to /etc/cron.d, cron job to run splitlz pperiodically
+etc/vsftp - goes to /etc/pam.d, pam used by vstfpd
+etc/vsftpd.conf - Server configuration
+etc/vsftpd.pem - SSL-Certificate
+PortableSigner/* - goes to /opt, tool used to sign the individual Lohnzettel PDFs
+service/vsftpd.sh - goes to /etc/service/vsftpd/run, service start script
+
+#### BUILDING ####
+
+docker build -t [image_name] .
+
+
+#### RUNNING ####
+
+1) docker volume create [volume_name]
+2) docker run -d -v [volume_name]:/persist -p 20-21:20-21 -p 21100-21110:21100-21110 --name [container_name] [image_name]
+3) log into system with docker exec -it [image_name] bash -l3) log into system with docker exec -it [image_name] bash -l3) log into system with docker exec -it [image_name] bash -l
+
+#### FIRST STEPS ####
+
+change default password of user inbox
+add users to the system with ftpuser

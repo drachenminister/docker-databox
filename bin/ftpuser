@@ -1,0 +1,113 @@
+#!/bin/bash
+
+# print usage on syntax errors
+function print_usage(){
+    cat <<HELPMESSAGE
+
+Usage:
+    ftpuser <function> <user> -x [-p <passwd>]
+
+Functions:
+    -a    add new user
+    -d    delete user
+    -c    change users
+
+    only one function may be specified at a time
+
+Options:
+    -x    when -d is specified remove users databox and files as well
+HELPMESSAGE
+
+    exit 1
+}
+
+# add new user to users.txt
+function add_user(){
+    if [[ `egrep ^${USER}\$ /persist/users.txt` ]]; then
+        echo "$USER allready exists"
+        exit 2
+    fi
+    echo "Adding user $USER to the database"
+    echo $USER >> /persist/users.txt
+    echo $PASSWD >> /persist/users.txt
+    mkdir -p /persist/$USER
+}
+
+# remove user and password from users.txt
+function del_user(){
+    if [[ ! `egrep ^${USER}\$ /persist/users.txt` ]]; then
+        echo "Can't find user $USER"
+        exit 3
+    fi
+    sed -i "/$USER/,+1 d" /persist/users.txt
+    if [[ "$DELBOX" == "YES" ]]; then
+        rm -r /persist/$USER
+        echo "Deleting user $USER including databox and files"
+    else
+        echo "Deleting user $USER"
+    fi
+}
+
+# change users password in users.txt
+function chg_passwd(){
+    if [[ ! `egrep ^${USER}\$ /persist/users.txt` ]]; then
+        echo "Can't find user $USER"
+        exit 3
+    fi
+    echo "Setting new password for user $USER"
+    sed -i "/$USER/ {n;s/.*/$PASSWD/}" /persist/users.txt
+}
+
+#parse commandline
+while getopts "a:c:d:xp:" opt; do
+    case $opt in
+        a) if [[ -z $FUNCTION ]]; then
+               FUNCTION="add_user"
+               USER="$OPTARG"
+           else
+               print_usage
+           fi
+        ;;
+        c) if [[ -z $FUNCTION ]]; then
+               FUNCTION="chg_passwd"
+               USER="$OPTARG"
+           else
+               print_usage
+           fi
+        ;;
+        d) if [[ -z $FUNCTION ]]; then
+               FUNCTION="del_user"
+               USER="$OPTARG"
+           else
+               print_usage
+           fi
+        ;;
+        x) DELBOX="YES"
+        ;;
+        p) PASSWD="$OPTARG"
+        ;;
+    esac
+done
+shift $(expr $OPTIND - 1)
+
+# USER and FUNCTION are mandatory
+if [[ -z $USER  || -z $FUNCTION ]]; then
+    print_usage
+fi
+
+# use random password if none was given
+if [[ ! "$FUNCTION" == "del_user"  && -z $PASSWD ]]; then
+    PASSWD="$(cat /dev/urandom | tr -dc 'a-km-zA-HJ-NP-Z1-9' | fold -w 8 | head -n 1)"
+fi
+
+# disallow deletion of special user inbox
+if [[ "$FUNCTION" == "del_user"  &&  "$USER" = "inbox" ]]; then
+    echo "Can't delete special user 'inbox'"
+    exit 4
+fi
+
+# work on users.txt
+$FUNCTION
+
+# reload users.db from users.txt
+/usr/bin/db_load -T -t hash -f /persist/users.txt /persist/users.db

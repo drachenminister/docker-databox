@@ -1,0 +1,213 @@
+#!/bin/bash
+
+# setting verbosity
+INFO='YES'
+WARN='YES'
+DEBUG='NO'
+
+# setting dirs
+TEMP='/persist/tmp'
+FILING='/persist/inbox/Ablage'
+SKIPPED='/persist/skipped'
+
+
+function info(){
+    if [[ "$INFO" == 'YES' ]]; then
+       echo "$@" >&2
+    fi
+}
+function warn(){
+    if [[ "$WARN" == 'YES' ]]; then
+       echo "$@" >&2
+    fi
+}
+function debug(){
+    if [[ "$DEBUG" == 'YES' ]]; then
+       echo "$@" >&2
+    fi
+}
+
+
+# ------------------------------------------------------------------------------
+# int pagecount ( string filename )
+# ------------------------------------------------------------------------------
+# returns the number of Pages in the 'Lohnset'
+# file excluding the 'Summenbeleg'
+#
+function pagecount(){
+    COUNT=$(pdfinfo "$1" | grep 'Pages' | tr -s ' ' | cut -d ' ' -f2)
+    while :
+    do
+        if [[ "$(pdftotext -f $COUNT -l $COUNT "$1" - | \
+          grep 'Summenbeleg')"  == '' ]]; then
+            break;
+        fi
+        ((COUNT--))
+    done
+    echo "$COUNT"
+}
+
+# ------------------------------------------------------------------------------
+# string person ( string text )
+# ------------------------------------------------------------------------------
+# returns the 'Personalnummer' from the
+# text version of a 'Lohnzettel
+#
+function person(){
+    echo "$(echo "$1" | grep 'Person' | tr -s ' ' | cut -d ' ' -f4)"
+}
+
+
+# ------------------------------------------------------------------------------
+# string pattern ( string text )
+# ------------------------------------------------------------------------------
+# extracts 'Personalnummer' year and month
+# from text of a 'Lohnzettel' and returns
+# a filepattern in the form of:
+# 'Personalnummer - Year Month'
+#
+function pattern(){
+    NR="$(echo "$1" | grep 'Person' | tr -s ' ' | cut -d ' ' -f4)"
+    YY="$(echo "$1" | grep 'Lohn / Gehaltsabrechnung' | \
+      tr -s ' ' | cut -d ' ' -f6)"
+    MM="$(echo "$1" | grep 'Lohn / Gehaltsabrechnung' | \
+      tr -s ' ' | cut -d ' ' -f5)"
+    echo "$NR - $YY $MM"
+}
+
+
+# ------------------------------------------------------------------------------
+# string signature ( string text )
+# ------------------------------------------------------------------------------
+# looks for 'Firmennummer' and returns
+# the path to the corresponding signature
+#
+function signature(){
+    case $(echo "$1" | grep 'Firma' | tr -s ' ' | cut -d ' ' -f4) in
+        40) echo '/persist/certs/ubeer.pfx'
+        ;;
+        41) echo '/persist/certs/tbeer.pfx'
+        ;;
+        42) echo '/persist/certs/abeer.pfx'
+        ;;
+    esac
+}
+
+
+# ------------------------------------------------------------------------------
+# void process ( string filename, int from, int to, string text, bool replace )
+# ------------------------------------------------------------------------------
+# processes a single 'Lohnzettel'-Oobject
+# given by filename and page range.
+#
+# Existing 'Lohnzettel'-Objects are skipped
+# unless otherwise specified by 'replace'
+#
+# Each 'Lohnzettel'-Object is put in its
+# corresponding DataBox (if it exists) or kept
+# in a 'Skipped'-Queue for later retries
+#
+function process(){
+    INFILE="$1"; FROM=$2; TO=$3; TEXT="$4"; REPLACE="$5"
+
+    # identify Object and set DataBox
+    OBJECT="$(pattern "$TEXT")"
+    DATABOX="/persist/$(echo "$OBJECT" | cut -d ' ' -f1)"
+
+    # process if not in Filing or replace was specified
+    if [[ ! -f "$FILING/$OBJECT.pdf"  ||  "$REPLACE" == 'YES' ]]; then
+        debug "processing $OBJECT"
+        # split
+        debug "splitting out Pages $FROM to $TO as $OBJECT"
+        cpdf "$INFILE" $FROM-$TO -o "$TEMP/$OBJECT.tmp"
+
+        # sign and file
+        debug "signing and filing $OBJECT"
+        PortableSigner -n -t "$TEMP/$OBJECT.tmp" -o "$FILING/$OBJECT.pdf" \
+          -s $(signature "$TEXT") -p 'xgt2ev45' >/dev/null 2>&1
+        rm "$TEMP/$OBJECT.tmp"
+
+        # copy to DataBox or Skipped Queue
+        if [[ -d "$DATABOX" ]]; then
+            info "writing $DATABOX/$OBJECT.pdf"
+            cp "$FILING/$OBJECT.pdf" "$DATABOX/"
+        else
+            warn "writing $SKIPPED/$OBJECT.pdf"
+            cp "$FILING/$OBJECT.pdf" "$SKIPPED/"
+        fi
+    else
+        debug "skipping $OBJECT"
+    fi
+}
+
+
+# ------------------------------------------------------------------------------
+# void recheck_skipped ( void )
+# ------------------------------------------------------------------------------
+# Loop through all Lohnzettel-Objects in the
+# Skipped-Queue trying to deliver them to
+# their corresponding DataBoxes if they got
+# created in the meantime
+#
+function recheck_skipped(){
+    for FILE in /persist/skipped/*.pdf
+    do
+        DATABOX="/persist/$(echo "$FILE" | cut -d '/' -f4 | cut -d ' ' -f1)"
+        if [[ -d "$DATABOX" ]]; then
+            debug "delivering $FILE to $DATABOX/"
+            mv "$FILE" "$DATABOX/"
+        fi
+    done
+}
+
+
+# ------------------------------------------------------------------------------
+# void main ( options )
+# ------------------------------------------------------------------------------
+# Loop through all PDF-Files in Inbox splitting
+# out individual 'Lohnzettel'-Files into the
+# corresponding DataBoxes
+#
+# options:
+#
+#   r   replace existing files
+#   s   recheck skipped
+#
+while getopts 'rs' opt
+do
+    case $opt in
+        r) REPLACE='YES'
+        ;;
+        s) recheck_skipped
+        ;;
+    esac
+done
+
+find /persist/inbox -maxdepth 1 -type f -name "*.pdf" | while read FILE
+do
+    PAGECOUNT=$(pagecount "$FILE")
+    debug "Started processing file $FILE ($PAGECOUNT Pages)"
+
+    # evaluate first Page
+    FROM=1
+    LAST="$(pdftotext -layout -f 1 -l 1 "$FILE" -)"
+
+    # loop through remaining pages
+    PAGE=2
+    while [[ $PAGE -le $PAGECOUNT ]]
+    do
+        THIS="$(pdftotext -layout -f $PAGE -l $PAGE "$FILE" -)"
+        if [[ "$(person "$THIS")" != "$(person "$LAST")" ]]; then
+            process "$FILE" $FROM $((PAGE-1)) "$LAST" "$REPLACE"
+            LAST="$THIS"
+            FROM=$PAGE
+        fi
+        ((PAGE++))
+    done
+
+    # remeber to split the last one aswell
+    process "$FILE" $FROM $((PAGE-1)) "$LAST" "$REPLACE"
+
+    # mark filse as done
+    mv "$FILE" "$FILE.done"
+done

@@ -1,0 +1,6 @@
+# create self-seigned certificate
+openssl req -x509 -nodes -days 365 -newkey rsa:1024 -keyout abeer.key -out abeer.pem -subj "/C=AT/O=Pflegeheim Alexander Beer GmbH & Co KG/L=Neulengbach/CN=ABeer"
+# convert .pem to .pfx (password xgt...) for PortableSigner
+openssl pkcs12 -export -out abeer.pfx -in abeer.pem -inkey abeer.key
+# sign pdf
+PortableSigner -n -b de -t in.pdf -o out.pdf -s /persist/certs/abeer.pfx -p xgt2ev45

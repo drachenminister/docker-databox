@@ -1,0 +1,1 @@
+*/5	*	*	*	*	root	/usr/bin/splitlz >/var/log/splitlz.log 2>&1
